@@ -4,6 +4,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn.modules.transformer import Transformer, TransformerEncoderLayer, TransformerEncoder
 
+seq_voc = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
+
 import models
 from models.mol_transformer import MolTransformer
 from models.prop_predictor import PropPredictor
@@ -47,6 +49,8 @@ class ProteinEmbedding(nn.Module):
         return self.dropout(x)
 
 
+# The following is heavily based on the PyTorch transformer tutorial
+# https://pytorch.org/tutorials/beginner/transformer_tutorial.html.
 class ProteinTransformer(nn.Module):
 
     def __init__(self, d_model=64, nhead=2, num_encoder_layers=4,

@@ -5,9 +5,15 @@ import torch.nn as nn
 from protein_transformer import ProteinTransformer, BindingPredictor
 from models.prop_predictor import PropPredictor
 from graph.mol_graph import MolGraph
+import multiprocessing
+import sys
 
 # lazy, sloppy way of reading in all the data
 from get_data import *
+
+args.device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+if not torch.cuda.is_available():
+    torch.set_num_threads(multiprocessing.cpu_count() // 2)
 
 molnet = PropPredictor(args, n_classes = 64)
 tmp = PropPredictor(args, n_classes = 1)
@@ -19,13 +25,17 @@ tmp = ProteinTransformer(d_model=64, nhead=4, num_encoder_layers=2,
                          dim_feedforward=32, dropout=0.1, activation='relu')
 tmp.load_state_dict(torch.load('pretrained_protein_transformer_2.torch'))
 
-model = BindingPredictor(tmp.embedder, tmp.encoder, molnet)
+model = BindingPredictor(tmp.embedder.to(args.device), tmp.encoder.to(args.device), molnet.to(args.device))
 
 np.random.seed(42)
 batch_inds = np.arange(affinity_tr.shape[0])
 np.random.shuffle(batch_inds)
 batch_inds_ts = np.arange(affinity_ts.shape[0])
 np.random.shuffle(batch_inds_ts)
+
+if len(sys.argv) > 1 and sys.argv[1] == 'debug':
+    batch_inds = batch_inds[:3000]
+    batch_inds_ts = batch_inds_ts[:1000]
 
 def get_index_batch(i, bsz):
     return batch_inds[i:i+bsz]
@@ -35,23 +45,29 @@ def setup_batch(i, bsz):
     pr_seq = proteins_tr[inds, :]
     smile_batch, path_batch = combine_data([drug_dataset[j] for j in drugs_tr_ind[inds]], args)
     path_input, path_mask = path_batch
+    path_input = path_input.to(args.device)
+    path_mask = path_mask.to(args.device)
     mol_graph = MolGraph(smile_batch, args, path_input, path_mask)
-    return torch.tensor(pr_seq).to(torch.int64), mol_graph, torch.tensor(affinity_tr[inds]).to(torch.float32)
+    return torch.tensor(pr_seq, device = args.device).to(torch.int64), mol_graph,\
+           torch.tensor(affinity_tr[inds], device=args.device).to(torch.float32)
 
 def setup_batch_ts(i, bsz):
     inds = batch_inds_ts[i:i+bsz]
     pr_seq = proteins_tr[inds, :]
     smile_batch, path_batch = combine_data([drug_dataset[j] for j in drugs_ts_ind[inds]], args)
     path_input, path_mask = path_batch
+    path_input = path_input.to(args.device)
+    path_mask = path_mask.to(args.device)
     mol_graph = MolGraph(smile_batch, args, path_input, path_mask)
-    return torch.tensor(pr_seq).to(torch.int64), mol_graph, torch.tensor(affinity_ts[inds]).to(torch.float32)
+    return torch.tensor(pr_seq, device = args.device).to(torch.int64), mol_graph,\
+           torch.tensor(affinity_ts[inds], device=args.device).to(torch.float32)
 
 criterion = nn.MSELoss()
 lr = 5.0 # learning rate
 optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
 
-batch_size = 100
+batch_size = 10
 
 import time
 def train():
@@ -59,7 +75,7 @@ def train():
     total_loss = 0.
     start_time = time.time()
     ntokens = len(seq_voc)
-    for batch, i in enumerate(range(0, drugs_tr_ind.shape[0] - 1, batch_size)):
+    for batch, i in enumerate(range(0, batch_inds.shape[0] - 1, batch_size)):
         pr_seq, mol_graph, affinity = setup_batch(i, batch_size)
         optimizer.zero_grad()
         output = model(pr_seq, mol_graph)
@@ -88,7 +104,7 @@ def evaluate(eval_model):
     ntokens = len(seq_voc)
     count = 0
     with torch.no_grad():
-        for i in range(0, drugs_ts_ind.size(0) - 1, batch_size):
+        for i in range(0, batch_inds_ts.shape[0] - 1, batch_size):
             pr_seq, mol_graph, affinity = setup_batch_ts(i, batch_size)
             output = eval_model(pr_seq, mol_graph)
             total_loss += len(affinity) * criterion(output, affinity).item()
@@ -97,6 +113,8 @@ def evaluate(eval_model):
 best_val_loss = float("inf")
 epochs = 10 # The number of epochs
 best_model = None
+
+model.to(args.device)
 
 for epoch in range(1, epochs + 1):
     epoch_start_time = time.time()
@@ -113,3 +131,5 @@ for epoch in range(1, epochs + 1):
         best_model = model
 
     scheduler.step()
+
+torch.save(model.state_dict(), 'bapred.th')

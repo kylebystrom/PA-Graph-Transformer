@@ -47,7 +47,9 @@ def setup_batch(i, bsz):
     path_input, path_mask = path_batch
     path_input = path_input.to(args.device)
     path_mask = path_mask.to(args.device)
+    #print(path_input.size(), path_mask.size())
     mol_graph = MolGraph(smile_batch, args, path_input, path_mask)
+
     return torch.tensor(pr_seq, device = args.device).to(torch.int64), mol_graph,\
            torch.tensor(affinity_tr[inds], device=args.device).to(torch.float32)
 
@@ -86,6 +88,7 @@ def train():
 
         total_loss += loss.item()
         log_interval = 200
+        torch.cuda.empty_cache()
         if batch % log_interval == 0 and batch > 0:
             cur_loss = total_loss / log_interval
             elapsed = time.time() - start_time

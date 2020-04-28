@@ -6,11 +6,6 @@ from torch.nn.modules.transformer import Transformer, TransformerEncoderLayer, T
 
 seq_voc = "ABCDEFGHIKLMNOPQRSTUVWXYZ"
 
-import models
-from models.mol_transformer import MolTransformer
-from models.prop_predictor import PropPredictor
-import argparse
-
 
 class ProteinEmbedding(nn.Module):
 
@@ -142,6 +137,87 @@ class BindingPredictor(nn.Module):
         atom_feat = self.molnet(mol_graph, None)
         # shape (nbatch, 1, dmodel)
         atom_feat = torch.unsqueeze(atom_feat, 1)
+
+        # shape (nbatch, lpr, dmodel)
+        int_vec = pr_enc * atom_feat
+        int_enc = self.encoder2(int_vec)
+
+        # shape (nbatch, dmodel)
+        int_enc = torch.logsumexp(int_enc, 1)
+        # shape (nbatch, 1)
+        int_enc = self.linear1(int_enc)
+        int_enc = F.relu(int_enc)
+        result = self.linear2(int_enc)
+
+        # shape (nbatch)
+        return result.squeeze(1)
+
+
+class BindingPredictor2(nn.Module):
+
+    def __init__(self, embedder, encoder,
+                 d_model=64, agg_func = 'sum', molnet_outsize=160,
+                 encoder2_nhead=1, encoder2_dim=32,
+                 dropout=0.1, activation='relu'):
+        """
+        BindingPredictor takes in a protein sequence and MolGraph,
+        and outputs a predicted binding affinity between the protein
+        sequence and molecule.
+        :param embedder: ProteinEmbedding object (possibly pretrained)
+        :param encoder: TransformerEncoder object (possibly pretrained)
+        :param molnet: PropPredictor object (possible pretrained, with output
+            dimension (i.e. n_classes) equal to d_model
+        :param d_model: dimension of the embedder, encoder, and molnet
+        :param encoder2_nhead: Number of heads in the second encoder
+        :param encoder2_dim: Feedforward dimension of the second encoder
+        :param dropout: Dropout rate
+        :param activation: relu or gelu, used for second encoder
+        """
+        super(BindingPredictor2, self).__init__()
+
+        self.embedder = embedder
+        self.encoder = encoder
+
+        encoder_layer = TransformerEncoderLayer(d_model, encoder2_dim, encoder2_dim, dropout, activation)
+        encoder_norm = nn.LayerNorm(d_model)
+        self.encoder2 = TransformerEncoder(encoder_layer, 1, encoder_norm)
+
+        # These are for aggregating molecular data.
+        self.W_p_h = nn.Linear(molnet_outsize, molnet_outsize)
+        self.W_p_o = nn.Linear(molnet_outsize, d_model)
+        self.agg_func = agg_func
+
+        self.linear1 = nn.Linear(d_model, 1)
+        self.linear2 = nn.Linear(1, 1)
+
+    def aggregate_atom_h(self, atom_h, scope):
+        mol_h = []
+        for (st, le) in scope:
+            cur_atom_h = atom_h.narrow(0, st, le)
+
+            if self.agg_func == 'sum':
+                mol_h.append(cur_atom_h.sum(dim=0))
+            elif self.agg_func == 'mean':
+                mol_h.append(cur_atom_h.mean(dim=0))
+            else:
+                assert(False)
+        mol_h = torch.stack(mol_h, dim=0)
+        return mol_h
+
+    def forward(self, pr_seq, atom_h_batch, scope):
+
+        mol_h = self.aggregate_atom_h(atom_h_batch, scope)
+        mol_h = nn.ReLU()(self.W_p_h(mol_h))
+        # shape (nbatch, dmodel)
+        mol_o = self.W_p_o(mol_h)
+
+        # shape (nbatch, lpr, dmodel)
+        pr_vec = self.embedder(pr_seq)
+        # shape (nbatch, lpr, dmodel)
+        pr_enc = self.encoder(pr_vec)
+
+        # shape (nbatch, 1, dmodel)
+        atom_feat = torch.unsqueeze(mol_o, 1)
 
         # shape (nbatch, lpr, dmodel)
         int_vec = pr_enc * atom_feat

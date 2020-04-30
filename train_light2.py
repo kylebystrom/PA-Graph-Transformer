@@ -30,22 +30,20 @@ molnet = molnet.to(args.device)
 for param in molnet.model.parameters():
     param.requires_grad = False
 
-tmp = ProteinTransformer(d_model=64, nhead=4, num_encoder_layers=2,
-                         dim_feedforward=32, dropout=0.1, activation='relu')
-tmp.load_state_dict(torch.load('pretrained_protein_transformer_2.torch'))
-
-model = BindingPredictor2(tmp.embedder.to(args.device), tmp.encoder.to(args.device))
-model.to(args.device)
+model = torch.load('out_model_light.pt', map_location=args.device)#BindingPredictor(tmp.embedder.to(args.device), tmp.encoder.to(args.device), molnet.to(args.device))
+model.embedder.to(args.device)
+model.encoder.to(args.device)
+#model.encoder.reset_parameters()
 
 np.random.seed(42)
 batch_inds = np.arange(affinity_tr.shape[0])
-np.random.shuffle(batch_inds)
+#np.random.shuffle(batch_inds)
 batch_inds_ts = np.arange(affinity_ts.shape[0])
-np.random.shuffle(batch_inds_ts)
+#np.random.shuffle(batch_inds_ts)
 
 if len(sys.argv) > 1 and sys.argv[1] == 'debug':
-    batch_inds = batch_inds[:3000]
-    batch_inds_ts = batch_inds_ts[:1000]
+    batch_inds = batch_inds[:100]
+    batch_inds_ts = batch_inds_ts[:10]
 
 def get_index_batch(i, bsz):
     return batch_inds[i:i+bsz]
@@ -132,7 +130,7 @@ def train():
         output = model(pr_seq, mol_tensor_set, scope_set)
         loss = criterion(output, affinity)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
 
         total_loss += loss.item()
@@ -183,6 +181,6 @@ for epoch in range(1, epochs + 1):
 
     scheduler.step()
 
-    torch.save(model.state_dict(), 'bapred_light.pt')
-    torch.save(model, 'out_model_light.pt')
+    torch.save(model.state_dict(), 'bapred_light_2.pt')
+    torch.save(model, 'out_model_light_2.pt')
 

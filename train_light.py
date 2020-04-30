@@ -38,6 +38,7 @@ model = BindingPredictor2(tmp.embedder.to(args.device), tmp.encoder.to(args.devi
 model.to(args.device)
 
 np.random.seed(42)
+torch.manual_seed(42)
 batch_inds = np.arange(affinity_tr.shape[0])
 np.random.shuffle(batch_inds)
 batch_inds_ts = np.arange(affinity_ts.shape[0])
@@ -114,11 +115,10 @@ def setup_batch_ts(i, bsz):
            torch.tensor(affinity_ts[inds], device=args.device).to(torch.float32)
 
 criterion = nn.MSELoss()
-lr = 1.0 # learning rate
-optimizer = torch.optim.SGD(model.parameters(), lr=lr)
+lr = 0.0025 # learning rate
+optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1.0, gamma=0.95)
-
-batch_size = 100
+batch_size = 1
 
 import time
 def train():
@@ -128,9 +128,12 @@ def train():
     ntokens = len(seq_voc)
     for batch, i in enumerate(range(0, batch_inds.shape[0] - 1, batch_size)):
         pr_seq, scope_set, mol_tensor_set, affinity = setup_batch(i, batch_size)
-        optimizer.zero_grad()
+
         output = model(pr_seq, mol_tensor_set, scope_set)
         loss = criterion(output, affinity)
+
+        optimizer.zero_grad()
+
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
         optimizer.step()
@@ -159,7 +162,7 @@ def evaluate(eval_model):
             pr_seq, scope_set, mol_tensor_set, affinity = setup_batch_ts(i, batch_size)
             output = eval_model(pr_seq, mol_tensor_set, scope_set)
             total_loss += len(affinity) * criterion(output, affinity).item()
-    return total_loss / (len(drugs_ts_ind) - 1)
+    return total_loss / (len(batch_inds_ts) - 1)
 
 best_val_loss = float("inf")
 epochs = 100 # The number of epochs

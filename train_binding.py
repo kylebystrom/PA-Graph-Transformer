@@ -55,7 +55,7 @@ def setup_batch(i, bsz):
 
 def setup_batch_ts(i, bsz):
     inds = batch_inds_ts[i:i+bsz]
-    pr_seq = proteins_tr[inds, :]
+    pr_seq = proteins_ts[inds, :]
     smile_batch, path_batch = combine_data([drug_dataset[j] for j in drugs_ts_ind[inds]], args)
     path_input, path_mask = path_batch
     path_input = path_input.to(args.device)
